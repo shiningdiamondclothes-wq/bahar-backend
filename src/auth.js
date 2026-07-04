@@ -2,11 +2,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../db/database');
 
-/**
- * Az admin jelszó (hash-elt formában) az adatbázisban van, hogy az admin
- * felületről is módosítható legyen. Első induláskor a .env-ben megadott
- * ADMIN_PASSWORD_HASH-t vesszük át kiindulásnak.
- */
 function getPasswordHash() {
   const row = db.prepare("SELECT value FROM admin_settings WHERE key='admin_password_hash'").get();
   if (row) return row.value;
@@ -16,6 +11,14 @@ function getPasswordHash() {
     db.prepare("INSERT INTO admin_settings (key, value) VALUES ('admin_password_hash', ?)").run(initialHash);
     return initialHash;
   }
+
+  const plainPassword = process.env.ADMIN_PASSWORD;
+  if (plainPassword) {
+    const hash = bcrypt.hashSync(plainPassword, 10);
+    db.prepare("INSERT INTO admin_settings (key, value) VALUES ('admin_password_hash', ?)").run(hash);
+    return hash;
+  }
+
   return null;
 }
 
@@ -38,11 +41,6 @@ function signToken() {
   return jwt.sign({ role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '12h' });
 }
 
-/**
- * Express middleware — a védett admin végpontok elé kell tenni.
- * A frontendnek "Authorization: Bearer <token>" fejlécet kell küldenie,
- * amit a /api/admin/login végpont ad vissza sikeres belépéskor.
- */
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
