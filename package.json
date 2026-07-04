@@ -1,0 +1,22 @@
+{
+  "name": "bahar-backend",
+  "version": "1.0.0",
+  "description": "Bahar webshop háttérrendszere — valódi adatbázis, Barion fizetés és számlázz.hu integráció",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "hash-password": "node scripts/hash-password.js",
+    "import-backup": "node scripts/import-backup.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.4",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
