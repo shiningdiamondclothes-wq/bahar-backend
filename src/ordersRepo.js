@@ -37,11 +37,6 @@ function getOrderByBarionPaymentId(paymentId) {
   return row ? rowToOrder(row) : null;
 }
 
-/**
- * Új rendelés mentése. Elfogadja a jelenlegi (kliens oldali) exportformátumot
- * is (buyer{name,email,phone,address}, items, invoiceMock{...}) — így a
- * korábbi mentés-fájlok közvetlenül importálhatók.
- */
 function insertOrder(o) {
   db.prepare(
     `INSERT OR IGNORE INTO orders
@@ -79,6 +74,10 @@ function setInvoiceNumber(orderId, invoiceNumber) {
   db.prepare('UPDATE orders SET invoice_number = ? WHERE id = ?').run(invoiceNumber, orderId);
 }
 
+function deleteOrder(id) {
+  db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+}
+
 module.exports = {
   listOrders,
   getOrder,
@@ -87,4 +86,5 @@ module.exports = {
   setBarionPaymentId,
   updateStatus,
   setInvoiceNumber,
+  deleteOrder,
 };
