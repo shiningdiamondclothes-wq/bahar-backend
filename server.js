@@ -5,12 +5,7 @@ const routes = require('./routes');
 
 const app = express();
 
-app.use(
-  cors({
-    origin: process.env.FRONTEND_URL || '*',
-  })
-);
-// A limit megnövelve, mert a termékképek base64 kódolva, a JSON body részeként érkeznek.
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 app.use(routes);
