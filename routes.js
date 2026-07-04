@@ -153,6 +153,11 @@ router.get('/api/admin/orders', authMiddleware, (req, res) => {
   res.json(ordersRepo.listOrders());
 });
 
+router.delete('/api/admin/orders/:id', authMiddleware, (req, res) => {
+  ordersRepo.deleteOrder(req.params.id);
+  res.json({ success: true });
+});
+
 router.post('/api/admin/import', authMiddleware, (req, res) => {
   const { products = [], orders = [] } = req.body;
   let productCount = 0;
