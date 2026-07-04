@@ -11,21 +11,10 @@ function uid(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-// ===========================================================================
-// NYILVÁNOS VÉGPONTOK (a bolt oldala hívja, bejelentkezés nélkül)
-// ===========================================================================
-
-/** A bolt termékrácsa ezt hívja meg induláskor. */
 router.get('/api/products', (req, res) => {
   res.json(productsRepo.listProducts());
 });
 
-/**
- * A "Rendelés véglegesítése" gombra kattintva ezt hívja a frontend.
- * Bankkártya / Apple Pay esetén Barion fizetést indít, és visszaadja a
- * GatewayUrl-t, ahova a böngészőnek át kell irányítania a vásárlót.
- * Utánvét / átutalás esetén azonnal kiállítja a számlát.
- */
 router.post('/api/checkout', async (req, res) => {
   try {
     const { buyer, items, shipping = 0, codFee = 0, paymentMethod } = req.body;
@@ -33,7 +22,6 @@ router.post('/api/checkout', async (req, res) => {
       return res.status(400).json({ error: 'Hiányzó vagy hiányos rendelési adatok.' });
     }
 
-    // Készlet-ellenőrzés szerver oldalon (sose bízz a kliens által küldött árban/mennyiségben!)
     for (const item of items) {
       const product = productsRepo.getProduct(item.id);
       if (!product) return res.status(400).json({ error: `Ismeretlen termék: ${item.id}` });
@@ -58,10 +46,8 @@ router.post('/api/checkout', async (req, res) => {
       status: 'pending',
     });
 
-    // Készlet csökkentése
     items.forEach((i) => productsRepo.decrementStock(i.id, i.qty));
 
-    // Utánvét / átutalás: nincs online fizetés, a számla azonnal kiállítható
     if (paymentMethod === 'Utánvét' || paymentMethod === 'Átutalás') {
       const invoice = await issueInvoice({ id: orderId, buyer, items, paymentMethod });
       ordersRepo.updateStatus(orderId, 'confirmed');
@@ -69,7 +55,6 @@ router.post('/api/checkout', async (req, res) => {
       return res.json({ orderId, requiresPayment: false, invoiceNumber: invoice.invoiceNumber });
     }
 
-    // Bankkártya / Apple Pay -> Barion Smart Gateway hosztolt fizetési oldala
     const payment = await startPayment({
       orderId,
       total,
@@ -87,11 +72,6 @@ router.post('/api/checkout', async (req, res) => {
   }
 });
 
-/**
- * A Barion HÍVJA MEG ezt automatikusan, amikor egy fizetés állapota változik.
- * Biztonsági megjegyzés: SOSE bízz a callback body-ban érkező adatokban —
- * mindig kérdezd le a valódi állapotot a GetPaymentState hívással (ahogy itt).
- */
 router.post('/api/barion-callback', async (req, res) => {
   try {
     const { PaymentId } = req.body;
@@ -121,16 +101,11 @@ router.post('/api/barion-callback', async (req, res) => {
   }
 });
 
-/** Rendelés állapotának lekérdezése (pl. a "fizetés eredménye" oldalon). */
 router.get('/api/order-status/:orderId', (req, res) => {
   const order = ordersRepo.getOrder(req.params.orderId);
   if (!order) return res.status(404).json({ error: 'Nincs ilyen rendelés.' });
   res.json({ status: order.status, invoiceNumber: order.invoiceNumber || null });
 });
-
-// ===========================================================================
-// ADMIN BEJELENTKEZÉS
-// ===========================================================================
 
 router.post('/api/admin/login', (req, res) => {
   const { password } = req.body;
@@ -150,10 +125,6 @@ router.put('/api/admin/password', authMiddleware, (req, res) => {
   setPasswordHash(bcrypt.hashSync(newPassword, 10));
   res.json({ success: true });
 });
-
-// ===========================================================================
-// ADMIN VÉGPONTOK (mindegyik "Authorization: Bearer <token>" fejlécet igényel)
-// ===========================================================================
 
 router.get('/api/admin/products', authMiddleware, (req, res) => {
   res.json(productsRepo.listProducts());
@@ -180,6 +151,28 @@ router.delete('/api/admin/products/:id', authMiddleware, (req, res) => {
 
 router.get('/api/admin/orders', authMiddleware, (req, res) => {
   res.json(ordersRepo.listOrders());
+});
+
+router.post('/api/admin/import', authMiddleware, (req, res) => {
+  const { products = [], orders = [] } = req.body;
+  let productCount = 0;
+  let orderCount = 0;
+
+  products.forEach((p) => {
+    productsRepo.upsertProduct({ ...p, id: p.id || uid('p') });
+    productCount++;
+  });
+
+  orders.forEach((o) => {
+    try {
+      ordersRepo.insertOrder(o);
+      orderCount++;
+    } catch (e) {
+      // már létező rendelés, kihagyjuk
+    }
+  });
+
+  res.json({ productCount, orderCount });
 });
 
 module.exports = router;
