@@ -55,6 +55,17 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS analytics_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    product_id TEXT,
+    session_id TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_events_type_product ON analytics_events(event_type, product_id);
+  CREATE INDEX IF NOT EXISTS idx_events_created ON analytics_events(created_at);
 `);
 
 module.exports = db;
