@@ -285,6 +285,19 @@ router.delete('/api/admin/finance/expense/:id', authMiddleware, (req, res) => {
   }
 });
 
+router.put('/api/admin/finance/expense/:id', authMiddleware, (req, res) => {
+  try {
+    const { date, vendor, item, paymentMethod, buyerType, amountGross, note } = req.body;
+    if (!date || !amountGross) {
+      return res.status(400).json({ error: 'A dátum és a bruttó összeg megadása kötelező.' });
+    }
+    res.json(financeRepo.updateExpense(req.params.id, { date, vendor, item, paymentMethod, buyerType, amountGross, note }));
+  } catch (err) {
+    console.error('Kiadás módosítási hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/api/admin/finance/cash-journal', authMiddleware, (req, res) => {
   try {
     res.json(financeRepo.cashJournal());
