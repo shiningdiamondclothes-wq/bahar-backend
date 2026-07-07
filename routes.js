@@ -14,6 +14,28 @@ function uid(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/**
+ * Sikeres rendelés után automatikusan rögzít egy bevétel-tételt a Pénzügy
+ * modulban, hogy ne kelljen duplán, kézzel is beírni. Az így létrejött tétel
+ * ugyanúgy törölhető/szerkeszthető az admin felületen, mint bármelyik kézzel
+ * felvitt bevétel — csak a kiindulópontja automatikus.
+ */
+function logOrderIncome(orderId, paymentMethod, total) {
+  const sourceMap = { 'Utánvét': 'keszpenz', 'Átutalás': 'atutalas', 'Barion': 'barion' };
+  const source = sourceMap[paymentMethod];
+  if (!source) return;
+  try {
+    financeRepo.insertIncome({
+      date: new Date().toISOString().slice(0, 10),
+      source,
+      amount: total,
+      note: `Rendelés: ${orderId}`,
+    });
+  } catch (err) {
+    console.error('Automatikus bevétel-rögzítési hiba:', err.message);
+  }
+}
+
 // ===========================================================================
 // NYILVÁNOS VÉGPONTOK (a bolt oldala hívja, bejelentkezés nélkül)
 // ===========================================================================
@@ -72,6 +94,7 @@ router.post('/api/checkout', async (req, res) => {
       const invoice = await issueInvoice({ id: orderId, buyer, items, paymentMethod });
       ordersRepo.updateStatus(orderId, 'confirmed');
       ordersRepo.setInvoiceNumber(orderId, invoice.invoiceNumber);
+      logOrderIncome(orderId, paymentMethod, total);
       return res.json({ orderId, requiresPayment: false, invoiceNumber: invoice.invoiceNumber });
     }
 
@@ -116,6 +139,7 @@ router.post('/api/barion-callback', async (req, res) => {
         paymentMethod: order.paymentMethod,
       });
       ordersRepo.setInvoiceNumber(order.id, invoice.invoiceNumber);
+      logOrderIncome(order.id, order.paymentMethod, order.total);
     } else if (['Canceled', 'Expired', 'Failed'].includes(state.Status)) {
       ordersRepo.updateStatus(order.id, 'failed');
     }
@@ -180,6 +204,26 @@ router.get('/api/admin/stock-notifications', authMiddleware, (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Visszavárólista lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/api/admin/stock-notifications/:id', authMiddleware, (req, res) => {
+  try {
+    stockNotifyRepo.deleteNotification(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Visszavárólista törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/api/admin/analytics/product/:id', authMiddleware, (req, res) => {
+  try {
+    analyticsRepo.deleteEventsForProduct(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Statisztika törlési hiba:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
