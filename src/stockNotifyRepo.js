@@ -18,14 +18,19 @@ function subscribe(productId, email) {
 /** Admin-nézet: minden termékre, hány fő és mely e-mail címek várnak még értesítésre. */
 function listPendingGroupedByProduct() {
   const rows = db.prepare(
-    `SELECT product_id, email, created_at FROM stock_notifications WHERE notified = 0 ORDER BY product_id, created_at`
+    `SELECT id, product_id, email, created_at FROM stock_notifications WHERE notified = 0 ORDER BY product_id, created_at`
   ).all();
   const grouped = {};
   rows.forEach(r => {
     if (!grouped[r.product_id]) grouped[r.product_id] = [];
-    grouped[r.product_id].push({ email: r.email, date: r.created_at });
+    grouped[r.product_id].push({ id: r.id, email: r.email, date: r.created_at });
   });
   return grouped;
+}
+
+/** Egyetlen visszavárólista-feliratkozás törlése (pl. ha kézzel már felkerested az illetőt). */
+function deleteNotification(id) {
+  db.prepare(`DELETE FROM stock_notifications WHERE id = ?`).run(id);
 }
 
 /** Az összes még nem értesített feliratkozó egy adott termékre. */
@@ -42,4 +47,4 @@ function markNotified(ids) {
   db.prepare(`UPDATE stock_notifications SET notified = 1 WHERE id IN (${placeholders})`).run(...ids);
 }
 
-module.exports = { subscribe, listPendingGroupedByProduct, listPendingForProduct, markNotified };
+module.exports = { subscribe, listPendingGroupedByProduct, listPendingForProduct, markNotified, deleteNotification };
