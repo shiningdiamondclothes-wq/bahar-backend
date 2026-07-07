@@ -66,6 +66,27 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_events_type_product ON analytics_events(event_type, product_id);
   CREATE INDEX IF NOT EXISTS idx_events_created ON analytics_events(created_at);
+
+  CREATE TABLE IF NOT EXISTS finance_income (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    source TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS finance_expense (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    vendor TEXT,
+    item TEXT,
+    payment_method TEXT,
+    buyer_type TEXT,
+    amount_gross INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 module.exports = db;
