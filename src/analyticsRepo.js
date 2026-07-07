@@ -65,4 +65,12 @@ function overview() {
   return { totalViews, totalAddToCart, totalCheckoutStart };
 }
 
-module.exports = { logEvent, productStats, dailyTotals, overview };
+/**
+ * Egy termék statisztikai eseményeinek (megtekintés, kosárba-tétel) törlése —
+ * pl. ha nullázni szeretnéd egy termék adatait az admin felületen.
+ */
+function deleteEventsForProduct(productId) {
+  db.prepare(`DELETE FROM analytics_events WHERE product_id = ?`).run(productId);
+}
+
+module.exports = { logEvent, productStats, dailyTotals, overview, deleteEventsForProduct };
