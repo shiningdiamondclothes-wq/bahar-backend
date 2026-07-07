@@ -18,6 +18,8 @@ function rowToOrder(row) {
     status: row.status,
     barionPaymentId: row.barion_payment_id,
     invoiceNumber: row.invoice_number,
+    isGift: !!row.is_gift,
+    giftMessage: row.gift_message || '',
     date: row.created_at,
   };
 }
@@ -37,11 +39,16 @@ function getOrderByBarionPaymentId(paymentId) {
   return row ? rowToOrder(row) : null;
 }
 
+/**
+ * Új rendelés mentése. Elfogadja a jelenlegi (kliens oldali) exportformátumot
+ * is (buyer{name,email,phone,address}, items, invoiceMock{...}) — így a
+ * korábbi mentés-fájlok közvetlenül importálhatók.
+ */
 function insertOrder(o) {
   db.prepare(
     `INSERT OR IGNORE INTO orders
-      (id, buyer_name, buyer_email, buyer_phone, buyer_address, items, subtotal, shipping, cod_fee, total, payment_method, status, barion_payment_id, invoice_number, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      (id, buyer_name, buyer_email, buyer_phone, buyer_address, items, subtotal, shipping, cod_fee, total, payment_method, status, barion_payment_id, invoice_number, is_gift, gift_message, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     o.id,
     o.buyer?.name || '',
@@ -57,6 +64,8 @@ function insertOrder(o) {
     o.status || 'confirmed',
     o.barionPaymentId || null,
     o.invoiceNumber || o.invoiceMock?.invoiceNumber || null,
+    o.isGift ? 1 : 0,
+    o.giftMessage || null,
     o.date || new Date().toISOString()
   );
   return getOrder(o.id);
