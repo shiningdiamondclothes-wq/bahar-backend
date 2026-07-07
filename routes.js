@@ -222,41 +222,76 @@ router.delete('/api/admin/orders/:id', authMiddleware, (req, res) => {
 // ===========================================================================
 
 router.get('/api/admin/finance/income', authMiddleware, (req, res) => {
-  res.json({ items: financeRepo.listIncome(), summary: financeRepo.incomeSummary() });
+  try {
+    res.json({ items: financeRepo.listIncome(), summary: financeRepo.incomeSummary() });
+  } catch (err) {
+    console.error('Bevétel lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/api/admin/finance/income', authMiddleware, (req, res) => {
-  const { date, source, amount, note } = req.body;
-  if (!date || !source || !amount) {
-    return res.status(400).json({ error: 'A dátum, a forrás és az összeg megadása kötelező.' });
+  try {
+    const { date, source, amount, note } = req.body;
+    if (!date || !source || !amount) {
+      return res.status(400).json({ error: 'A dátum, a forrás és az összeg megadása kötelező.' });
+    }
+    res.json(financeRepo.insertIncome({ date, source, amount, note }));
+  } catch (err) {
+    console.error('Bevétel rögzítési hiba:', err.message);
+    res.status(500).json({ error: err.message });
   }
-  res.json(financeRepo.insertIncome({ date, source, amount, note }));
 });
 
 router.delete('/api/admin/finance/income/:id', authMiddleware, (req, res) => {
-  financeRepo.deleteIncome(req.params.id);
-  res.json({ success: true });
+  try {
+    financeRepo.deleteIncome(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Bevétel törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/api/admin/finance/expense', authMiddleware, (req, res) => {
-  res.json({ items: financeRepo.listExpense(), total: financeRepo.expenseTotal() });
+  try {
+    res.json({ items: financeRepo.listExpense(), total: financeRepo.expenseTotal() });
+  } catch (err) {
+    console.error('Kiadás lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/api/admin/finance/expense', authMiddleware, (req, res) => {
-  const { date, vendor, item, paymentMethod, buyerType, amountGross, note } = req.body;
-  if (!date || !amountGross) {
-    return res.status(400).json({ error: 'A dátum és a bruttó összeg megadása kötelező.' });
+  try {
+    const { date, vendor, item, paymentMethod, buyerType, amountGross, note } = req.body;
+    if (!date || !amountGross) {
+      return res.status(400).json({ error: 'A dátum és a bruttó összeg megadása kötelező.' });
+    }
+    res.json(financeRepo.insertExpense({ date, vendor, item, paymentMethod, buyerType, amountGross, note }));
+  } catch (err) {
+    console.error('Kiadás rögzítési hiba:', err.message);
+    res.status(500).json({ error: err.message });
   }
-  res.json(financeRepo.insertExpense({ date, vendor, item, paymentMethod, buyerType, amountGross, note }));
 });
 
 router.delete('/api/admin/finance/expense/:id', authMiddleware, (req, res) => {
-  financeRepo.deleteExpense(req.params.id);
-  res.json({ success: true });
+  try {
+    financeRepo.deleteExpense(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Kiadás törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/api/admin/finance/cash-journal', authMiddleware, (req, res) => {
-  res.json(financeRepo.cashJournal());
+  try {
+    res.json(financeRepo.cashJournal());
+  } catch (err) {
+    console.error('Pénztárnapló lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
