@@ -87,6 +87,28 @@ db.exec(`
     note TEXT,
     created_at TEXT DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS stock_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    notified INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
 `);
+
+// Biztonságos "migráció": a régebben létrehozott orders táblához utólag
+// hozzáadjuk az ajándék-mezőket, ha még nincsenek benne. Az ALTER TABLE
+// hibát dobna, ha az oszlop már létezik — ezt egyszerűen figyelmen kívül
+// hagyjuk (ez a normális eset minden induláskor, az első után).
+function addColumnIfMissing(table, columnDef) {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${columnDef}`);
+  } catch (e) {
+    // az oszlop már létezik — ez rendben van
+  }
+}
+addColumnIfMissing('orders', 'is_gift INTEGER DEFAULT 0');
+addColumnIfMissing('orders', 'gift_message TEXT');
 
 module.exports = db;
