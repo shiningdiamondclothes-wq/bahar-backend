@@ -11,6 +11,8 @@ function rowToProduct(row) {
     stock: row.stock,
     description: row.description || '',
     image: row.image || null,
+    image2: row.image2 || null,
+    image3: row.image3 || null,
     categories: row.categories ? JSON.parse(row.categories) : [],
   };
 }
@@ -33,7 +35,7 @@ function upsertProduct(p) {
   if (existing) {
     db.prepare(
       `UPDATE products
-       SET name=?, sku=?, price=?, old_price=?, on_sale=?, stock=?, description=?, image=?, categories=?, updated_at=datetime('now')
+       SET name=?, sku=?, price=?, old_price=?, on_sale=?, stock=?, description=?, image=?, image2=?, image3=?, categories=?, updated_at=datetime('now')
        WHERE id=?`
     ).run(
       p.name,
@@ -44,13 +46,15 @@ function upsertProduct(p) {
       p.stock,
       p.description || '',
       p.image || null,
+      p.image2 || null,
+      p.image3 || null,
       JSON.stringify(p.categories || []),
       p.id
     );
   } else {
     db.prepare(
-      `INSERT INTO products (id, name, sku, price, old_price, on_sale, stock, description, image, categories)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO products (id, name, sku, price, old_price, on_sale, stock, description, image, image2, image3, categories)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(
       p.id,
       p.name,
@@ -61,6 +65,8 @@ function upsertProduct(p) {
       p.stock,
       p.description || '',
       p.image || null,
+      p.image2 || null,
+      p.image3 || null,
       JSON.stringify(p.categories || [])
     );
   }
