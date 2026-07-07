@@ -60,7 +60,12 @@ function incomeSummary() {
 }
 
 function expenseTotal() {
-  const row = db.prepare(`SELECT SUM(amount_gross) AS total FROM finance_expense`).get();
+  // A magánszemélyként vásárolt tételek NEM számítanak bele a hivatalos
+  // kiadás-összesítőbe (nincs hozzájuk cégre szóló számla), csak a cégként
+  // vásároltak — a magánszemélyes tételek a listában továbbra is látszanak.
+  const row = db.prepare(
+    `SELECT SUM(amount_gross) AS total FROM finance_expense WHERE buyer_type != 'maganszemely' OR buyer_type IS NULL`
+  ).get();
   return row.total || 0;
 }
 
@@ -74,7 +79,8 @@ function cashJournal() {
   ).all().map(r => ({ ...r, type: 'bevetel', label: r.note || 'Készpénzes bevétel' }));
 
   const cashExpense = db.prepare(
-    `SELECT id, date, amount_gross AS amount, item, vendor, note, created_at FROM finance_expense WHERE payment_method = 'keszpenz'`
+    `SELECT id, date, amount_gross AS amount, item, vendor, note, created_at FROM finance_expense
+     WHERE payment_method = 'keszpenz' AND (buyer_type != 'maganszemely' OR buyer_type IS NULL)`
   ).all().map(r => ({ ...r, type: 'kiadas', label: r.item ? `${r.item}${r.vendor ? ' (' + r.vendor + ')' : ''}` : (r.note || 'Készpénzes kiadás') }));
 
   const all = [...cashIncome, ...cashExpense].sort((a, b) => {
