@@ -20,6 +20,7 @@ function rowToOrder(row) {
     invoiceNumber: row.invoice_number,
     isGift: !!row.is_gift,
     giftMessage: row.gift_message || '',
+    giftFee: row.gift_fee || 0,
     date: row.created_at,
   };
 }
@@ -47,8 +48,8 @@ function getOrderByBarionPaymentId(paymentId) {
 function insertOrder(o) {
   db.prepare(
     `INSERT OR IGNORE INTO orders
-      (id, buyer_name, buyer_email, buyer_phone, buyer_address, items, subtotal, shipping, cod_fee, total, payment_method, status, barion_payment_id, invoice_number, is_gift, gift_message, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      (id, buyer_name, buyer_email, buyer_phone, buyer_address, items, subtotal, shipping, cod_fee, total, payment_method, status, barion_payment_id, invoice_number, is_gift, gift_message, gift_fee, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     o.id,
     o.buyer?.name || '',
@@ -66,6 +67,7 @@ function insertOrder(o) {
     o.invoiceNumber || o.invoiceMock?.invoiceNumber || null,
     o.isGift ? 1 : 0,
     o.giftMessage || null,
+    o.giftFee || 0,
     o.date || new Date().toISOString()
   );
   return getOrder(o.id);
