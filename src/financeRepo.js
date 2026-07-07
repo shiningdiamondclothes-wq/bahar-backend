@@ -45,6 +45,13 @@ function deleteExpense(id) {
   db.prepare(`DELETE FROM finance_expense WHERE id = ?`).run(id);
 }
 
+function updateExpense(id, { date, vendor, item, paymentMethod, buyerType, amountGross, note }) {
+  db.prepare(
+    `UPDATE finance_expense SET date=?, vendor=?, item=?, payment_method=?, buyer_type=?, amount_gross=?, note=? WHERE id=?`
+  ).run(date, vendor || null, item || null, paymentMethod || null, buyerType || null, amountGross, note || null, id);
+  return db.prepare(`SELECT * FROM finance_expense WHERE id = ?`).get(id);
+}
+
 // ===========================================================================
 // ÖSSZESÍTÉS forrás szerint (készpénz / barion / átutalás)
 // ===========================================================================
@@ -60,12 +67,11 @@ function incomeSummary() {
 }
 
 function expenseTotal() {
-  // A magánszemélyként vásárolt tételek NEM számítanak bele a hivatalos
-  // kiadás-összesítőbe (nincs hozzájuk cégre szóló számla), csak a cégként
-  // vásároltak — a magánszemélyes tételek a listában továbbra is látszanak.
-  const row = db.prepare(
-    `SELECT SUM(amount_gross) AS total FROM finance_expense WHERE buyer_type != 'maganszemely' OR buyer_type IS NULL`
-  ).get();
+  // Minden kiadás (cégként és magánszemélyként vásárolt is) beleszámít az
+  // "Összes kiadás" összesítőbe — mindkettő valós költség. Csak a
+  // Pénztárnaplóból (cashJournal) maradnak ki a magánszemélyes tételek,
+  // mert oda csak a hivatalos, céges pénzmozgás tartozik.
+  const row = db.prepare(`SELECT SUM(amount_gross) AS total FROM finance_expense`).get();
   return row.total || 0;
 }
 
@@ -99,6 +105,6 @@ function cashJournal() {
 
 module.exports = {
   listIncome, insertIncome, deleteIncome,
-  listExpense, insertExpense, deleteExpense,
+  listExpense, insertExpense, deleteExpense, updateExpense,
   incomeSummary, expenseTotal, cashJournal,
 };
