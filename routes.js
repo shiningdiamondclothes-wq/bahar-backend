@@ -31,7 +31,7 @@ router.get('/api/products', (req, res) => {
  */
 router.post('/api/checkout', async (req, res) => {
   try {
-    const { buyer, items, shipping = 0, codFee = 0, paymentMethod, isGift, giftMessage } = req.body;
+    const { buyer, items, shipping = 0, codFee = 0, giftFee = 0, paymentMethod, isGift, giftMessage } = req.body;
     if (!buyer?.email || !buyer?.name || !buyer?.address || !items?.length) {
       return res.status(400).json({ error: 'Hiányzó vagy hiányos rendelési adatok.' });
     }
@@ -46,7 +46,7 @@ router.post('/api/checkout', async (req, res) => {
     }
 
     const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
-    const total = subtotal + shipping + codFee;
+    const total = subtotal + shipping + codFee + giftFee;
     const orderId = 'BHR-' + Date.now();
 
     ordersRepo.insertOrder({
@@ -61,6 +61,7 @@ router.post('/api/checkout', async (req, res) => {
       status: 'pending',
       isGift,
       giftMessage,
+      giftFee,
     });
 
     // Készlet csökkentése
