@@ -6,6 +6,7 @@ const productsRepo = require('./src/productsRepo');
 const ordersRepo = require('./src/ordersRepo');
 const analyticsRepo = require('./src/analyticsRepo');
 const financeRepo = require('./src/financeRepo');
+const stockNotifyRepo = require('./src/stockNotifyRepo');
 const { verifyPassword, setPasswordHash, signToken, authMiddleware } = require('./src/auth');
 const bcrypt = require('bcryptjs');
 
@@ -30,7 +31,7 @@ router.get('/api/products', (req, res) => {
  */
 router.post('/api/checkout', async (req, res) => {
   try {
-    const { buyer, items, shipping = 0, codFee = 0, paymentMethod } = req.body;
+    const { buyer, items, shipping = 0, codFee = 0, paymentMethod, isGift, giftMessage } = req.body;
     if (!buyer?.email || !buyer?.name || !buyer?.address || !items?.length) {
       return res.status(400).json({ error: 'Hiányzó vagy hiányos rendelési adatok.' });
     }
@@ -58,6 +59,8 @@ router.post('/api/checkout', async (req, res) => {
       total,
       paymentMethod,
       status: 'pending',
+      isGift,
+      giftMessage,
     });
 
     // Készlet csökkentése
@@ -146,9 +149,39 @@ router.post('/api/track', (req, res) => {
   res.status(204).end();
 });
 
-// ===========================================================================
-// ADMIN BEJELENTKEZÉS
-// ===========================================================================
+/**
+ * Visszavárólista-feliratkozás: a vásárló e-mail címet ad meg egy elfogyott
+ * termékhez, hogy értesítést kapjon, amint újra raktáron lesz. A tényleges
+ * e-mail-küldés majd a Resend beállítása után fog élesben menni — addig az
+ * admin felületen látszik, ki vár melyik termékre.
+ */
+router.post('/api/notify-stock', (req, res) => {
+  try {
+    const { productId, email } = req.body || {};
+    if (!productId || !email) {
+      return res.status(400).json({ error: 'Termék és e-mail cím megadása kötelező.' });
+    }
+    const result = stockNotifyRepo.subscribe(productId, email);
+    res.json(result);
+  } catch (err) {
+    console.error('Visszavárólista-hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/admin/stock-notifications', authMiddleware, (req, res) => {
+  try {
+    const grouped = stockNotifyRepo.listPendingGroupedByProduct();
+    const result = Object.entries(grouped).map(([productId, subs]) => {
+      const p = productsRepo.getProduct(productId);
+      return { productId, productName: p ? p.name : productId, stock: p ? p.stock : null, subscribers: subs };
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Visszavárólista lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/api/admin/login', (req, res) => {
   const { password } = req.body;
