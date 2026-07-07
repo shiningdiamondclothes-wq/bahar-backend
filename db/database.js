@@ -110,5 +110,6 @@ function addColumnIfMissing(table, columnDef) {
 }
 addColumnIfMissing('orders', 'is_gift INTEGER DEFAULT 0');
 addColumnIfMissing('orders', 'gift_message TEXT');
+addColumnIfMissing('orders', 'gift_fee INTEGER DEFAULT 0');
 
 module.exports = db;
