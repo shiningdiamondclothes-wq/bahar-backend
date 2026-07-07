@@ -5,6 +5,7 @@ const { issueInvoice } = require('./src/szamlazzClient');
 const productsRepo = require('./src/productsRepo');
 const ordersRepo = require('./src/ordersRepo');
 const analyticsRepo = require('./src/analyticsRepo');
+const financeRepo = require('./src/financeRepo');
 const { verifyPassword, setPasswordHash, signToken, authMiddleware } = require('./src/auth');
 const bcrypt = require('bcryptjs');
 
@@ -214,6 +215,48 @@ router.get('/api/admin/analytics', authMiddleware, (req, res) => {
 router.delete('/api/admin/orders/:id', authMiddleware, (req, res) => {
   ordersRepo.deleteOrder(req.params.id);
   res.json({ success: true });
+});
+
+// ===========================================================================
+// PÉNZÜGY (admin-only): bevétel, kiadás, pénztárnapló
+// ===========================================================================
+
+router.get('/api/admin/finance/income', authMiddleware, (req, res) => {
+  res.json({ items: financeRepo.listIncome(), summary: financeRepo.incomeSummary() });
+});
+
+router.post('/api/admin/finance/income', authMiddleware, (req, res) => {
+  const { date, source, amount, note } = req.body;
+  if (!date || !source || !amount) {
+    return res.status(400).json({ error: 'A dátum, a forrás és az összeg megadása kötelező.' });
+  }
+  res.json(financeRepo.insertIncome({ date, source, amount, note }));
+});
+
+router.delete('/api/admin/finance/income/:id', authMiddleware, (req, res) => {
+  financeRepo.deleteIncome(req.params.id);
+  res.json({ success: true });
+});
+
+router.get('/api/admin/finance/expense', authMiddleware, (req, res) => {
+  res.json({ items: financeRepo.listExpense(), total: financeRepo.expenseTotal() });
+});
+
+router.post('/api/admin/finance/expense', authMiddleware, (req, res) => {
+  const { date, vendor, item, paymentMethod, buyerType, amountGross, note } = req.body;
+  if (!date || !amountGross) {
+    return res.status(400).json({ error: 'A dátum és a bruttó összeg megadása kötelező.' });
+  }
+  res.json(financeRepo.insertExpense({ date, vendor, item, paymentMethod, buyerType, amountGross, note }));
+});
+
+router.delete('/api/admin/finance/expense/:id', authMiddleware, (req, res) => {
+  financeRepo.deleteExpense(req.params.id);
+  res.json({ success: true });
+});
+
+router.get('/api/admin/finance/cash-journal', authMiddleware, (req, res) => {
+  res.json(financeRepo.cashJournal());
 });
 
 /**
