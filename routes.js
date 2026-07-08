@@ -91,11 +91,23 @@ router.post('/api/checkout', async (req, res) => {
 
     // Utánvét / átutalás: nincs online fizetés, a számla azonnal kiállítható
     if (paymentMethod === 'Utánvét' || paymentMethod === 'Átutalás') {
-      const invoice = await issueInvoice({ id: orderId, buyer, items, paymentMethod });
+      // A rendelés visszaigazolása és a bevétel-rögzítés MINDIG megtörténik,
+      // függetlenül attól, hogy a számlázz.hu-s számlázás sikerül-e — a
+      // számlázás egy még be nem kötött külső szolgáltatás, ennek hibája
+      // nem akaszthatja meg magát a rendelés feldolgozását.
       ordersRepo.updateStatus(orderId, 'confirmed');
-      ordersRepo.setInvoiceNumber(orderId, invoice.invoiceNumber);
       logOrderIncome(orderId, paymentMethod, total);
-      return res.json({ orderId, requiresPayment: false, invoiceNumber: invoice.invoiceNumber });
+
+      let invoiceNumber = null;
+      try {
+        const invoice = await issueInvoice({ id: orderId, buyer, items, paymentMethod });
+        invoiceNumber = invoice.invoiceNumber;
+        ordersRepo.setInvoiceNumber(orderId, invoiceNumber);
+      } catch (err) {
+        console.error('Számlázás sikertelen (a rendelés emellett feldolgozásra került):', err.message);
+      }
+
+      return res.json({ orderId, requiresPayment: false, invoiceNumber });
     }
 
     // Bankkártya / Apple Pay -> Barion Smart Gateway hosztolt fizetési oldala
@@ -132,14 +144,19 @@ router.post('/api/barion-callback', async (req, res) => {
 
     if (state.Status === 'Succeeded') {
       ordersRepo.updateStatus(order.id, 'paid');
-      const invoice = await issueInvoice({
-        id: order.id,
-        buyer: order.buyer,
-        items: order.items,
-        paymentMethod: order.paymentMethod,
-      });
-      ordersRepo.setInvoiceNumber(order.id, invoice.invoiceNumber);
       logOrderIncome(order.id, order.paymentMethod, order.total);
+
+      try {
+        const invoice = await issueInvoice({
+          id: order.id,
+          buyer: order.buyer,
+          items: order.items,
+          paymentMethod: order.paymentMethod,
+        });
+        ordersRepo.setInvoiceNumber(order.id, invoice.invoiceNumber);
+      } catch (err) {
+        console.error('Számlázás sikertelen (a Barion fizetés emellett feldolgozásra került):', err.message);
+      }
     } else if (['Canceled', 'Expired', 'Failed'].includes(state.Status)) {
       ordersRepo.updateStatus(order.id, 'failed');
     }
