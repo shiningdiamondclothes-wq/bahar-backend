@@ -21,7 +21,11 @@ function uid(prefix) {
  * felvitt bevétel — csak a kiindulópontja automatikus.
  */
 function logOrderIncome(orderId, paymentMethod, total) {
-  const sourceMap = { 'Utánvét': 'keszpenz', 'Átutalás': 'atutalas', 'Barion': 'barion' };
+  // Az Utánvét összegét is a futárszolgálat utalja át később, tehát ez SOSEM
+  // fizikai készpénz a kezedben — ezért egyik online/webshopos fizetési mód
+  // sem "keszpenz" forrás. A "keszpenz" kategória csak a kézzel, admin
+  // felületen manuálisan rögzített, ténylegesen kézben kapott összegekre való.
+  const sourceMap = { 'Utánvét': 'atutalas', 'Átutalás': 'atutalas', 'Barion': 'barion' };
   const source = sourceMap[paymentMethod];
   if (!source) return;
   try {
