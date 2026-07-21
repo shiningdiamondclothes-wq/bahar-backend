@@ -7,6 +7,7 @@ const ordersRepo = require('./src/ordersRepo');
 const analyticsRepo = require('./src/analyticsRepo');
 const financeRepo = require('./src/financeRepo');
 const stockNotifyRepo = require('./src/stockNotifyRepo');
+const { sendBackInStockEmail } = require('./src/emailClient');
 const { verifyPassword, setPasswordHash, signToken, authMiddleware } = require('./src/auth');
 const bcrypt = require('bcryptjs');
 
@@ -288,6 +289,24 @@ router.put('/api/admin/products/:id', authMiddleware, (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Nincs ilyen termék.' });
   const saved = productsRepo.upsertProduct({ ...existing, ...req.body, id: req.params.id });
   res.json(saved);
+
+  // Ha a termék az imént került vissza raktárra (0-ról pozitívra), értesítjük
+  // a visszavárólistán feliratkozókat — ez a válasz elküldése UTÁN fut,
+  // hogy a levélküldés lassúsága sose lassítsa le magát a mentést.
+  if (existing.stock <= 0 && saved.stock > 0) {
+    const pending = stockNotifyRepo.listPendingForProduct(saved.id);
+    if (pending.length > 0) {
+      Promise.all(
+        pending.map((sub) =>
+          sendBackInStockEmail(sub.email, saved).catch((err) =>
+            console.error(`Visszavárólista e-mail hiba (${sub.email}):`, err.message)
+          )
+        )
+      ).then(() => {
+        stockNotifyRepo.markNotified(pending.map((s) => s.id));
+      });
+    }
+  }
 });
 
 router.delete('/api/admin/products/:id', authMiddleware, (req, res) => {
