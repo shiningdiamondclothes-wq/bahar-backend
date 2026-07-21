@@ -113,5 +113,6 @@ addColumnIfMissing('orders', 'gift_message TEXT');
 addColumnIfMissing('orders', 'gift_fee INTEGER DEFAULT 0');
 addColumnIfMissing('products', 'image2 TEXT');
 addColumnIfMissing('products', 'image3 TEXT');
+addColumnIfMissing('products', 'cost_price INTEGER DEFAULT 0');
 
 module.exports = db;
