@@ -312,6 +312,15 @@ router.get('/api/admin/analytics', authMiddleware, (req, res) => {
 });
 
 router.delete('/api/admin/orders/:id', authMiddleware, (req, res) => {
+  // Törlés előtt a rendelésben szereplő tételek készletét visszaadjuk a
+  // raktárnak — enélkül a nyilvántartott készlet eltérne a valós,
+  // fizikai készlettől minden törölt rendelés után.
+  const order = ordersRepo.getOrder(req.params.id);
+  if (order) {
+    (order.items || []).forEach((item) => {
+      productsRepo.incrementStock(item.id, item.qty);
+    });
+  }
   ordersRepo.deleteOrder(req.params.id);
   res.json({ success: true });
 });
