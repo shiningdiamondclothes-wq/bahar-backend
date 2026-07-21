@@ -81,4 +81,13 @@ function decrementStock(id, qty) {
   db.prepare('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?').run(qty, id);
 }
 
-module.exports = { listProducts, getProduct, upsertProduct, deleteProduct, decrementStock };
+/**
+ * Készlet visszaállítása — pl. amikor egy rendelést töröl az admin, a benne
+ * szereplő tételeket vissza kell adni a raktárkészlethez, különben a
+ * nyilvántartás eltér a valódi, fizikai készlettől.
+ */
+function incrementStock(id, qty) {
+  db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(qty, id);
+}
+
+module.exports = { listProducts, getProduct, upsertProduct, deleteProduct, decrementStock, incrementStock };
