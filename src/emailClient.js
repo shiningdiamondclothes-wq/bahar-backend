@@ -118,7 +118,7 @@ async function sendOrderConfirmationEmail(order) {
 
     <p style="font-size:14px; line-height:1.7; color:#E4DFD3; margin:0 0 20px 0;">
       Kedves ${order.buyer?.name || 'Vásárlónk'}! Rendelésed megérkezett hozzánk, és már dolgozunk rajta.
-      Alább találod az összesítőt.
+      Itt a részletes összesítő a rendelésedről.
     </p>
 
     <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
