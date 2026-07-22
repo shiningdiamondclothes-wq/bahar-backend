@@ -1,174 +1,515 @@
+const express = require('express');
+const router = express.Router();
+const { startPayment, getPaymentState } = require('./src/barionClient');
+const { issueInvoice } = require('./src/szamlazzClient');
+const productsRepo = require('./src/productsRepo');
+const ordersRepo = require('./src/ordersRepo');
+const analyticsRepo = require('./src/analyticsRepo');
+const financeRepo = require('./src/financeRepo');
+const stockNotifyRepo = require('./src/stockNotifyRepo');
+const { sendBackInStockEmail, sendOrderConfirmationEmail } = require('./src/emailClient');
+const { verifyPassword, setPasswordHash, signToken, authMiddleware } = require('./src/auth');
+const bcrypt = require('bcryptjs');
 
-// Resend e-mail kliens
-// Dokumentáció: https://resend.com/docs
-//
-// A Resend egy egyszerű, ingyenes (havi 3000 e-mailig) tranzakciós
-// e-mail-küldő szolgáltatás. A "from" címnek egy olyan domain alá kell
-// tartoznia, amit a Resend felületén hitelesítettünk (bahar.hu) — enélkül
-// a küldés elutasításra kerülne.
- 
-const axios = require('axios');
- 
-const FROM_ADDRESS = process.env.RESEND_FROM || 'Bahar <hello@bahar.hu>';
- 
+function uid(prefix) {
+  return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 /**
- * Egyetlen e-mail elküldése a Resend API-n keresztül.
- * Sose dobjon tovább hibát olyan módon, ami megakasztaná a hívó folyamatot
- * (pl. egy admin-mentést) — a hívó fél dönti el, hogyan kezeli a hibát.
+ * Sikeres rendelés után automatikusan rögzít egy bevétel-tételt a Pénzügy
+ * modulban, hogy ne kelljen duplán, kézzel is beírni. Az így létrejött tétel
+ * ugyanúgy törölhető/szerkeszthető az admin felületen, mint bármelyik kézzel
+ * felvitt bevétel — csak a kiindulópontja automatikus.
  */
-async function sendEmail({ to, subject, html }) {
-  if (!process.env.RESEND_API_KEY) {
-    console.warn('RESEND_API_KEY hiányzik — e-mail küldés kihagyva:', subject, '->', to);
-    return { skipped: true };
+function logOrderIncome(orderId, paymentMethod, total) {
+  // Az Utánvét összegét is a futárszolgálat utalja át később, tehát ez SOSEM
+  // fizikai készpénz a kezedben — ezért egyik online/webshopos fizetési mód
+  // sem "keszpenz" forrás. A "keszpenz" kategória csak a kézzel, admin
+  // felületen manuálisan rögzített, ténylegesen kézben kapott összegekre való.
+  const sourceMap = { 'Utánvét': 'atutalas', 'Átutalás': 'atutalas', 'Barion': 'barion' };
+  const source = sourceMap[paymentMethod];
+  if (!source) return;
+  try {
+    financeRepo.insertIncome({
+      date: new Date().toISOString().slice(0, 10),
+      source,
+      amount: total,
+      note: `Rendelés: ${orderId}`,
+    });
+  } catch (err) {
+    console.error('Automatikus bevétel-rögzítési hiba:', err.message);
   }
-  const response = await axios.post(
-    'https://api.resend.com/emails',
-    { from: FROM_ADDRESS, to, subject, html },
-    { headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` } }
-  );
-  return response.data;
 }
- 
+
+// ===========================================================================
+// NYILVÁNOS VÉGPONTOK (a bolt oldala hívja, bejelentkezés nélkül)
+// ===========================================================================
+
+/** A bolt termékrácsa ezt hívja meg induláskor. */
+router.get('/api/products', (req, res) => {
+  res.json(productsRepo.listProducts());
+});
+
 /**
- * Egységes, márkázott e-mail-sablon — minden Resend-es levél ebbe a keretbe
- * kerül, hogy egységes megjelenésük legyen.
+ * A termékképek base64-be ágyazva vannak eltárolva az adatbázisban (mert a
+ * feltöltés is így történik a böngészőből). Egy e-mailbe viszont nem
+ * ajánlott base64 képet ágyazni — sok levelezőkliens (pl. Outlook) nem
+ * jeleníti meg. Ezért ez a végpont "kicsomagolja" az elmentett base64
+ * adatot, és valódi, nyilvánosan linkelhető képként (image/jpeg stb.)
+ * szolgálja ki — ezt tudja az e-mail-sablon egyszerű <img src="..."> -ként
+ * használni.
+ *
+ * Használat: /api/products/:id/image        -> a fő kép
+ *            /api/products/:id/image?n=2    -> image2
+ *            /api/products/:id/image?n=3    -> image3
  */
-function wrapEmailLayout(bodyHtml) {
-  return `
-  <div style="font-family:'Helvetica Neue',Arial,sans-serif; background:#F5F0E6; padding:32px 16px;">
-    <div style="max-width:480px; margin:0 auto; background:#0E0F0C; border-radius:4px; overflow:hidden;">
-      <div style="padding:28px 32px 0 32px;">
-        <div style="display:inline-block; background:#B23A28; color:#F5F0E6; width:28px; height:28px; line-height:28px; text-align:center; font-size:14px; border-radius:3px; margin-bottom:14px;">巴</div>
-        <div style="color:#F5F0E6; font-size:20px; letter-spacing:0.04em; font-weight:600; margin-bottom:4px;">BAHAR <span style="color:#8CA398; font-weight:400;">· 바하르</span></div>
-      </div>
-      <div style="padding:8px 32px 32px 32px; color:#F5F0E6;">
-        ${bodyHtml}
-      </div>
-      <div style="background:#0a0b09; padding:16px 32px; font-size:11px; color:#8CA398;">
-        Bahar — Koreai bőrápolás és kozmetikumok · bahar.hu
-      </div>
-    </div>
-  </div>`;
-}
- 
+router.get('/api/products/:id/image', (req, res) => {
+  const product = productsRepo.getProduct(req.params.id);
+  if (!product) return res.status(404).end();
+
+  const which = req.query.n === '2' ? 'image2' : req.query.n === '3' ? 'image3' : 'image';
+  const dataUrl = product[which];
+  if (!dataUrl) return res.status(404).end();
+
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) return res.status(404).end();
+
+  const [, mimeType, base64Data] = match;
+  res.set('Content-Type', mimeType);
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(Buffer.from(base64Data, 'base64'));
+});
+
 /**
- * Visszavárólista-értesítés: egy elfogyott termék újra raktáron van.
- * Egyesével küldjük a feliratkozóknak (nem egy közös "to" listával), hogy
- * senki más e-mail címét ne lássák a többiek.
+ * A "Rendelés véglegesítése" gombra kattintva ezt hívja a frontend.
+ * Bankkártya / Apple Pay esetén Barion fizetést indít, és visszaadja a
+ * GatewayUrl-t, ahova a böngészőnek át kell irányítania a vásárlót.
+ * Utánvét / átutalás esetén azonnal kiállítja a számlát.
  */
-async function sendBackInStockEmail(toEmail, product) {
-  const productUrl = `${process.env.FRONTEND_URL}/?termek=${encodeURIComponent(product.id)}`;
-  // A backend saját, nyilvánosan elérhető képvégpontja (BASE_URL) — nem a
-  // frontend (FRONTEND_URL) —, mert a beágyazott base64-et a szerver
-  // csomagolja ki és szolgálja ki valódi képként.
-  const productImageUrl = product.image
-    ? `${process.env.BASE_URL}/api/products/${encodeURIComponent(product.id)}/image`
-    : null;
-  const imageHtml = productImageUrl
-    ? `
-    <div style="margin:0 0 20px 0; border-radius:2px; overflow:hidden; background:#161710;">
-      <img src="${productImageUrl}" alt="${product.name}" width="416" style="display:block; width:100%; max-width:416px; height:auto;" />
-    </div>`
-    : '';
-  const html = wrapEmailLayout(`
-    <h1 style="font-size:18px; font-weight:400; margin:0 0 14px 0; font-family:Georgia,serif;">Újra raktáron! 🎉</h1>
-    ${imageHtml}
-    <p style="font-size:14px; line-height:1.7; color:#E4DFD3; margin:0 0 20px 0;">
-      Jó hírünk van — a(z) <strong style="color:#F5F0E6;">${product.name}</strong> újra elérhető a raktárunkban.
-      Mivel korábban jelezted, hogy szeretnél értesítést kapni róla, elsőként Te tudsz belőle rendelni,
-      mielőtt megint elfogyna.
-    </p>
-    <a href="${productUrl}" style="display:inline-block; background:#8CA398; color:#0E0F0C; text-decoration:none; padding:12px 24px; font-size:13px; letter-spacing:0.04em; text-transform:uppercase; border-radius:2px;">
-      Megnézem a terméket
-    </a>
-    <p style="font-size:12px; line-height:1.6; color:#8CA398; margin:24px 0 0 0;">
-      Ezt az e-mailt azért kaptad, mert korábban feliratkoztál a(z) "${product.name}" visszavárólistájára a bahar.hu oldalon.
-    </p>
-  `);
-  return sendEmail({ to: toEmail, subject: `Újra raktáron: ${product.name} — Bahar`, html });
-}
- 
+router.post('/api/checkout', async (req, res) => {
+  try {
+    const { buyer, items, shipping = 0, codFee = 0, giftFee = 0, paymentMethod, isGift, giftMessage } = req.body;
+    if (!buyer?.email || !buyer?.name || !buyer?.address || !items?.length) {
+      return res.status(400).json({ error: 'Hiányzó vagy hiányos rendelési adatok.' });
+    }
+
+    // Készlet-ellenőrzés szerver oldalon (sose bízz a kliens által küldött árban/mennyiségben!)
+    for (const item of items) {
+      const product = productsRepo.getProduct(item.id);
+      if (!product) return res.status(400).json({ error: `Ismeretlen termék: ${item.id}` });
+      if (product.stock < item.qty) {
+        return res.status(400).json({ error: `"${product.name}" termékből nincs elég készleten.` });
+      }
+    }
+
+    const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
+    const total = subtotal + shipping + codFee + giftFee;
+    const orderId = 'BHR-' + Date.now();
+
+    ordersRepo.insertOrder({
+      id: orderId,
+      buyer,
+      items,
+      subtotal,
+      shipping,
+      codFee,
+      total,
+      paymentMethod,
+      status: 'pending',
+      isGift,
+      giftMessage,
+      giftFee,
+    });
+
+    // Készlet csökkentése
+    items.forEach((i) => productsRepo.decrementStock(i.id, i.qty));
+
+    // Utánvét / átutalás: nincs online fizetés, a számla azonnal kiállítható
+    if (paymentMethod === 'Utánvét' || paymentMethod === 'Átutalás') {
+      // A rendelés visszaigazolása és a bevétel-rögzítés MINDIG megtörténik,
+      // függetlenül attól, hogy a számlázz.hu-s számlázás sikerül-e — a
+      // számlázás egy még be nem kötött külső szolgáltatás, ennek hibája
+      // nem akaszthatja meg magát a rendelés feldolgozását.
+      ordersRepo.updateStatus(orderId, 'confirmed');
+      logOrderIncome(orderId, paymentMethod, total);
+
+      // Az e-mail-küldés sose akassza meg vagy lassítsa a rendelés
+      // feldolgozását — ezért nem várjuk meg (nincs "await"), és a hibáját
+      // csak naplózzuk, nem adjuk tovább a vásárlónak.
+      sendOrderConfirmationEmail({
+        id: orderId,
+        buyer,
+        items,
+        subtotal,
+        shipping,
+        codFee,
+        giftFee,
+        total,
+        paymentMethod,
+        isGift,
+        giftMessage,
+      }).catch((err) => console.error('Rendelés-visszaigazoló e-mail hiba:', err.message));
+
+      let invoiceNumber = null;
+      try {
+        const invoice = await issueInvoice({ id: orderId, buyer, items, paymentMethod });
+        invoiceNumber = invoice.invoiceNumber;
+        ordersRepo.setInvoiceNumber(orderId, invoiceNumber);
+      } catch (err) {
+        console.error('Számlázás sikertelen (a rendelés emellett feldolgozásra került):', err.message);
+      }
+
+      return res.json({ orderId, requiresPayment: false, invoiceNumber });
+    }
+
+    // Bankkártya / Apple Pay -> Barion Smart Gateway hosztolt fizetési oldala
+    const payment = await startPayment({
+      orderId,
+      total,
+      items,
+      redirectUrl: `${process.env.FRONTEND_URL}/fizetes-eredmenye?orderId=${orderId}`,
+      callbackUrl: `${process.env.BASE_URL}/api/barion-callback`,
+      payerEmail: buyer.email,
+    });
+
+    ordersRepo.setBarionPaymentId(orderId, payment.PaymentId);
+    res.json({ orderId, requiresPayment: true, gatewayUrl: payment.GatewayUrl });
+  } catch (err) {
+    console.error('Checkout hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /**
- * Rendelés-visszaigazoló e-mail felépítése és elküldése.
- * Meghívható közvetlenül a rendelés leadásakor (Utánvét/Átutalás esetén,
- * ahol nincs online fizetés), vagy a Barion sikeres fizetési visszahívása
- * után — mindkét helyről ugyanazt az egységes sablont használja.
+ * A Barion HÍVJA MEG ezt automatikusan, amikor egy fizetés állapota változik.
+ * Biztonsági megjegyzés: SOSE bízz a callback body-ban érkező adatokban —
+ * mindig kérdezd le a valódi állapotot a GetPaymentState hívással (ahogy itt).
  */
-function fmtHuf(n) {
-  return new Intl.NumberFormat('hu-HU').format(n) + ' Ft';
-}
- 
-function buildOrderItemsHtml(items) {
-  return (items || [])
-    .map(
-      (i) => `
-    <tr>
-      <td style="padding:10px 0; border-bottom:1px solid #2a2b26; font-size:13px; color:#F5F0E6;">${i.name}</td>
-      <td style="padding:10px 0; border-bottom:1px solid #2a2b26; font-size:13px; color:#8CA398; text-align:center;">${i.qty} db</td>
-      <td style="padding:10px 0; border-bottom:1px solid #2a2b26; font-size:13px; color:#F5F0E6; text-align:right;">${fmtHuf(i.price * i.qty)}</td>
-    </tr>`
-    )
-    .join('');
-}
- 
-async function sendOrderConfirmationEmail(order) {
-  const itemsHtml = buildOrderItemsHtml(order.items);
-  const html = wrapEmailLayout(`
-    <h1 style="font-size:18px; font-weight:400; margin:0 0 6px 0; font-family:Georgia,serif;">Köszönjük a rendelésed! 🌿</h1>
-    <p style="font-size:13px; color:#8CA398; margin:0 0 20px 0;">Rendelésszám: <strong style="color:#F5F0E6;">${order.id}</strong></p>
- 
-    <p style="font-size:14px; line-height:1.7; color:#E4DFD3; margin:0 0 20px 0;">
-      Kedves ${order.buyer?.name || 'Vásárlónk'}! Rendelésed megérkezett hozzánk, és már dolgozunk rajta.
-      Alább találod az összesítőt.
-    </p>
- 
-    <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
-      <thead>
-        <tr>
-          <th style="text-align:left; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#8CA398; padding-bottom:8px; border-bottom:1px solid #2a2b26;">Termék</th>
-          <th style="text-align:center; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#8CA398; padding-bottom:8px; border-bottom:1px solid #2a2b26;">Db</th>
-          <th style="text-align:right; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#8CA398; padding-bottom:8px; border-bottom:1px solid #2a2b26;">Összeg</th>
-        </tr>
-      </thead>
-      <tbody>${itemsHtml}</tbody>
-    </table>
- 
-    <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
-      <tr>
-        <td style="padding:4px 0; font-size:13px; color:#8CA398;">Részösszeg</td>
-        <td style="padding:4px 0; font-size:13px; color:#F5F0E6; text-align:right;">${fmtHuf(order.subtotal || 0)}</td>
-      </tr>
-      <tr>
-        <td style="padding:4px 0; font-size:13px; color:#8CA398;">Szállítás</td>
-        <td style="padding:4px 0; font-size:13px; color:#F5F0E6; text-align:right;">${fmtHuf(order.shipping || 0)}</td>
-      </tr>
-      ${order.codFee ? `<tr><td style="padding:4px 0; font-size:13px; color:#8CA398;">Utánvét díja</td><td style="padding:4px 0; font-size:13px; color:#F5F0E6; text-align:right;">${fmtHuf(order.codFee)}</td></tr>` : ''}
-      ${order.giftFee ? `<tr><td style="padding:4px 0; font-size:13px; color:#8CA398;">Ajándék-csomagolás</td><td style="padding:4px 0; font-size:13px; color:#F5F0E6; text-align:right;">${fmtHuf(order.giftFee)}</td></tr>` : ''}
-      <tr>
-        <td style="padding:10px 0 0 0; font-size:15px; color:#F5F0E6; border-top:1px solid #2a2b26; font-weight:600;">Végösszeg</td>
-        <td style="padding:10px 0 0 0; font-size:15px; color:#F5F0E6; text-align:right; border-top:1px solid #2a2b26; font-weight:600;">${fmtHuf(order.total || 0)}</td>
-      </tr>
-    </table>
- 
-    <div style="background:#161710; padding:16px 18px; border-radius:2px; margin-bottom:20px;">
-      <p style="font-size:12px; color:#8CA398; margin:0 0 4px 0; text-transform:uppercase; letter-spacing:0.04em;">Szállítási cím</p>
-      <p style="font-size:13px; color:#F5F0E6; margin:0 0 12px 0;">${order.buyer?.address || ''}</p>
-      <p style="font-size:12px; color:#8CA398; margin:0 0 4px 0; text-transform:uppercase; letter-spacing:0.04em;">Fizetési mód</p>
-      <p style="font-size:13px; color:#F5F0E6; margin:0;">${order.paymentMethod || ''}</p>
-    </div>
- 
-    ${order.isGift && order.giftMessage ? `
-    <div style="background:#161710; padding:16px 18px; border-radius:2px; margin-bottom:20px;">
-      <p style="font-size:12px; color:#8CA398; margin:0 0 4px 0; text-transform:uppercase; letter-spacing:0.04em;">🎁 Ajándék üzenet</p>
-      <p style="font-size:13px; color:#F5F0E6; margin:0; font-style:italic;">„${order.giftMessage}”</p>
-    </div>` : ''}
- 
-    <p style="font-size:12px; line-height:1.6; color:#8CA398; margin:0;">
-      Kérdésed van a rendeléseddel kapcsolatban? Írj nekünk a
-      <a href="mailto:hello@bahar.hu" style="color:#8CA398;">hello@bahar.hu</a> címre, mi is a rendelésszámodra hivatkozva tudunk segíteni.
-    </p>
-  `);
-  return sendEmail({ to: order.buyer.email, subject: `Rendelés visszaigazolása — ${order.id}`, html });
-}
- 
-module.exports = { sendEmail, sendBackInStockEmail, sendOrderConfirmationEmail, wrapEmailLayout };
+router.post('/api/barion-callback', async (req, res) => {
+  try {
+    const { PaymentId } = req.body;
+    if (!PaymentId) return res.status(400).end();
+
+    const state = await getPaymentState(PaymentId);
+    const order = ordersRepo.getOrderByBarionPaymentId(PaymentId);
+    if (!order) return res.status(404).end();
+
+    if (state.Status === 'Succeeded') {
+      ordersRepo.updateStatus(order.id, 'paid');
+      logOrderIncome(order.id, order.paymentMethod, order.total);
+
+      sendOrderConfirmationEmail(order).catch((err) =>
+        console.error('Rendelés-visszaigazoló e-mail hiba (Barion):', err.message)
+      );
+
+      try {
+        const invoice = await issueInvoice({
+          id: order.id,
+          buyer: order.buyer,
+          items: order.items,
+          paymentMethod: order.paymentMethod,
+        });
+        ordersRepo.setInvoiceNumber(order.id, invoice.invoiceNumber);
+      } catch (err) {
+        console.error('Számlázás sikertelen (a Barion fizetés emellett feldolgozásra került):', err.message);
+      }
+    } else if (['Canceled', 'Expired', 'Failed'].includes(state.Status)) {
+      ordersRepo.updateStatus(order.id, 'failed');
+    }
+
+    res.status(200).end();
+  } catch (err) {
+    console.error('Barion callback hiba:', err.message);
+    res.status(500).end();
+  }
+});
+
+/** Rendelés állapotának lekérdezése (pl. a "fizetés eredménye" oldalon). */
+router.get('/api/order-status/:orderId', (req, res) => {
+  const order = ordersRepo.getOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Nincs ilyen rendelés.' });
+  res.json({ status: order.status, invoiceNumber: order.invoiceNumber || null });
+});
+
+/**
+ * Egyszerű, saját statisztika-naplózás: a bolt oldala hívja meg, amikor
+ * valaki megnéz egy terméket, kosárba tesz valamit, vagy elkezdi a pénztárt.
+ * Szándékosan nem igényel bejelentkezést (a vásárlók névtelenül böngésznek),
+ * és sose dob hibát a vásárló felé, még akkor sem, ha a naplózás elakadna.
+ */
+router.post('/api/track', (req, res) => {
+  try {
+    const { eventType, productId, sessionId } = req.body || {};
+    analyticsRepo.logEvent({ eventType, productId, sessionId });
+  } catch (err) {
+    console.error('Statisztika naplózási hiba:', err.message);
+  }
+  res.status(204).end();
+});
+
+/**
+ * Visszavárólista-feliratkozás: a vásárló e-mail címet ad meg egy elfogyott
+ * termékhez, hogy értesítést kapjon, amint újra raktáron lesz. A tényleges
+ * e-mail-küldés majd a Resend beállítása után fog élesben menni — addig az
+ * admin felületen látszik, ki vár melyik termékre.
+ */
+router.post('/api/notify-stock', (req, res) => {
+  try {
+    const { productId, email } = req.body || {};
+    if (!productId || !email) {
+      return res.status(400).json({ error: 'Termék és e-mail cím megadása kötelező.' });
+    }
+    const result = stockNotifyRepo.subscribe(productId, email);
+    res.json(result);
+  } catch (err) {
+    console.error('Visszavárólista-hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/admin/stock-notifications', authMiddleware, (req, res) => {
+  try {
+    const grouped = stockNotifyRepo.listPendingGroupedByProduct();
+    const result = Object.entries(grouped).map(([productId, subs]) => {
+      const p = productsRepo.getProduct(productId);
+      return { productId, productName: p ? p.name : productId, stock: p ? p.stock : null, subscribers: subs };
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Visszavárólista lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/api/admin/stock-notifications/:id', authMiddleware, (req, res) => {
+  try {
+    stockNotifyRepo.deleteNotification(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Visszavárólista törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/api/admin/analytics/product/:id', authMiddleware, (req, res) => {
+  try {
+    analyticsRepo.deleteEventsForProduct(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Statisztika törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Add meg a jelszót.' });
+
+  if (!verifyPassword(password)) {
+    return res.status(401).json({ error: 'Hibás jelszó.' });
+  }
+  res.json({ token: signToken() });
+});
+
+router.put('/api/admin/password', authMiddleware, (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ error: 'Az új jelszó legyen legalább 4 karakter.' });
+  }
+  setPasswordHash(bcrypt.hashSync(newPassword, 10));
+  res.json({ success: true });
+});
+
+// ===========================================================================
+// ADMIN VÉGPONTOK (mindegyik "Authorization: Bearer <token>" fejlécet igényel)
+// ===========================================================================
+
+router.get('/api/admin/products', authMiddleware, (req, res) => {
+  res.json(productsRepo.listProducts());
+});
+
+router.post('/api/admin/products', authMiddleware, (req, res) => {
+  const p = req.body;
+  if (!p.name || !p.price) return res.status(400).json({ error: 'Hiányzó név vagy ár.' });
+  const saved = productsRepo.upsertProduct({ ...p, id: p.id || uid('p') });
+  res.json(saved);
+});
+
+router.put('/api/admin/products/:id', authMiddleware, (req, res) => {
+  const existing = productsRepo.getProduct(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Nincs ilyen termék.' });
+  const saved = productsRepo.upsertProduct({ ...existing, ...req.body, id: req.params.id });
+  res.json(saved);
+
+  // Ha a termék az imént került vissza raktárra (0-ról pozitívra), értesítjük
+  // a visszavárólistán feliratkozókat — ez a válasz elküldése UTÁN fut,
+  // hogy a levélküldés lassúsága sose lassítsa le magát a mentést.
+  if (existing.stock <= 0 && saved.stock > 0) {
+    const pending = stockNotifyRepo.listPendingForProduct(saved.id);
+    if (pending.length > 0) {
+      Promise.all(
+        pending.map((sub) =>
+          sendBackInStockEmail(sub.email, saved).catch((err) =>
+            console.error(`Visszavárólista e-mail hiba (${sub.email}):`, err.message)
+          )
+        )
+      ).then(() => {
+        stockNotifyRepo.markNotified(pending.map((s) => s.id));
+      });
+    }
+  }
+});
+
+router.delete('/api/admin/products/:id', authMiddleware, (req, res) => {
+  productsRepo.deleteProduct(req.params.id);
+  res.json({ success: true });
+});
+
+router.get('/api/admin/orders', authMiddleware, (req, res) => {
+  res.json(ordersRepo.listOrders());
+});
+
+/**
+ * Statisztika összesítés az admin "Statisztika" fülhöz: termékenkénti
+ * megtekintés/kosárba-tétel számok + néhány összesített szám.
+ */
+router.get('/api/admin/analytics', authMiddleware, (req, res) => {
+  res.json({
+    overview: analyticsRepo.overview(),
+    products: analyticsRepo.productStats(),
+    daily: analyticsRepo.dailyTotals(14),
+  });
+});
+
+router.delete('/api/admin/orders/:id', authMiddleware, (req, res) => {
+  // Törlés előtt a rendelésben szereplő tételek készletét visszaadjuk a
+  // raktárnak — enélkül a nyilvántartott készlet eltérne a valós,
+  // fizikai készlettől minden törölt rendelés után.
+  const order = ordersRepo.getOrder(req.params.id);
+  if (order) {
+    (order.items || []).forEach((item) => {
+      productsRepo.incrementStock(item.id, item.qty);
+    });
+  }
+  ordersRepo.deleteOrder(req.params.id);
+  res.json({ success: true });
+});
+
+// ===========================================================================
+// PÉNZÜGY (admin-only): bevétel, kiadás, pénztárnapló
+// ===========================================================================
+
+router.get('/api/admin/finance/income', authMiddleware, (req, res) => {
+  try {
+    res.json({ items: financeRepo.listIncome(), summary: financeRepo.incomeSummary() });
+  } catch (err) {
+    console.error('Bevétel lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/admin/finance/income', authMiddleware, (req, res) => {
+  try {
+    const { date, source, amount, note } = req.body;
+    if (!date || !source || !amount) {
+      return res.status(400).json({ error: 'A dátum, a forrás és az összeg megadása kötelező.' });
+    }
+    res.json(financeRepo.insertIncome({ date, source, amount, note }));
+  } catch (err) {
+    console.error('Bevétel rögzítési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/api/admin/finance/income/:id', authMiddleware, (req, res) => {
+  try {
+    financeRepo.deleteIncome(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Bevétel törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/admin/finance/expense', authMiddleware, (req, res) => {
+  try {
+    res.json({ items: financeRepo.listExpense(), total: financeRepo.expenseTotal() });
+  } catch (err) {
+    console.error('Kiadás lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/admin/finance/expense', authMiddleware, (req, res) => {
+  try {
+    const { date, vendor, item, paymentMethod, buyerType, amountGross, note } = req.body;
+    if (!date || !amountGross) {
+      return res.status(400).json({ error: 'A dátum és a bruttó összeg megadása kötelező.' });
+    }
+    res.json(financeRepo.insertExpense({ date, vendor, item, paymentMethod, buyerType, amountGross, note }));
+  } catch (err) {
+    console.error('Kiadás rögzítési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/api/admin/finance/expense/:id', authMiddleware, (req, res) => {
+  try {
+    financeRepo.deleteExpense(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Kiadás törlési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/api/admin/finance/expense/:id', authMiddleware, (req, res) => {
+  try {
+    const { date, vendor, item, paymentMethod, buyerType, amountGross, note } = req.body;
+    if (!date || !amountGross) {
+      return res.status(400).json({ error: 'A dátum és a bruttó összeg megadása kötelező.' });
+    }
+    res.json(financeRepo.updateExpense(req.params.id, { date, vendor, item, paymentMethod, buyerType, amountGross, note }));
+  } catch (err) {
+    console.error('Kiadás módosítási hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/admin/finance/cash-journal', authMiddleware, (req, res) => {
+  try {
+    res.json(financeRepo.cashJournal());
+  } catch (err) {
+    console.error('Pénztárnapló lekérési hiba:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Egy korábbi mentés-fájl (products + orders tömbök) egyszerre való
+ * betöltésére — az admin felület "Mentés visszatöltése" gombjának
+ * a szerver oldali párja.
+ */
+router.post('/api/admin/import', authMiddleware, (req, res) => {
+  const { products = [], orders = [] } = req.body;
+  let productCount = 0;
+  let orderCount = 0;
+
+  products.forEach((p) => {
+    productsRepo.upsertProduct({ ...p, id: p.id || uid('p') });
+    productCount++;
+  });
+
+  orders.forEach((o) => {
+    try {
+      ordersRepo.insertOrder(o);
+      orderCount++;
+    } catch (e) {
+      // már létező rendelés, kihagyjuk
+    }
+  });
+
+  res.json({ productCount, orderCount });
+});
+
+module.exports = router;
